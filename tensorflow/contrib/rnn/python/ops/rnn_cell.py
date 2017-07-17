@@ -37,6 +37,7 @@ from tensorflow.python.ops import random_ops
 from tensorflow.python.ops import rnn_cell_impl
 from tensorflow.python.ops import variable_scope as vs
 from tensorflow.python.ops import partitioned_variables
+from tensorflow.python.ops import nn_impl
 from tensorflow.python.platform import tf_logging as logging
 from tensorflow.python.util import nest
 
@@ -2358,7 +2359,6 @@ class GLSTMCell(rnn_cell_impl.RNNCell):
     new_state = rnn_cell_impl.LSTMStateTuple(c, m)
     return m, new_state
 
-
 class LayerNormLSTMCell(rnn_cell_impl.RNNCell):
   """Long short-term memory unit (LSTM) recurrent network cell.
 
@@ -2457,7 +2457,6 @@ class LayerNormLSTMCell(rnn_cell_impl.RNNCell):
   def output_size(self):
     return self._output_size
 
-
   def _linear(self,
               args,
               output_size,
@@ -2480,6 +2479,7 @@ class LayerNormLSTMCell(rnn_cell_impl.RNNCell):
     Returns:
       A 2D Tensor with shape [batch x output_size] taking value
       sum_i(args[i] * W[i]), where each W[i] is a newly created Variable.
+
 
     Raises:
       ValueError: if some of the arguments has unspecified or wrong shape.
@@ -2554,6 +2554,7 @@ class LayerNormLSTMCell(rnn_cell_impl.RNNCell):
       ValueError: If input size cannot be inferred from inputs via
         static shape inference.
     """
+
     num_proj = self._num_units if self._num_proj is None else self._num_proj
     sigmoid = math_ops.sigmoid
 

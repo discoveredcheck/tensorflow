@@ -34,6 +34,7 @@ from tensorflow.python.ops import nn_ops
 from tensorflow.python.ops import random_ops
 from tensorflow.python.ops import rnn_cell_impl
 from tensorflow.python.ops import variable_scope as vs
+from tensorflow.python.ops import nn_impl
 from tensorflow.python.platform import tf_logging as logging
 from tensorflow.python.util import nest
 
@@ -2095,3 +2096,120 @@ class GLSTMCell(rnn_cell_impl.RNNCell):
 
     new_state = rnn_cell_impl.LSTMStateTuple(c, m)
     return m, new_state
+
+
+class WeightNormLSTMCell(rnn_cell_impl.BasicLSTMCell):
+  """Weight normalized LSTM Cell.
+
+        The implementation is based on
+        https://arxiv.org/abs/1602.07868
+        Tim Salimans, Diederik P. Kingma
+        Weight Normalization: A Simple Reparameterization to Accelerate
+        Training of Deep Neural Networks
+
+        LSTM implementation is the most basic by default, with optional
+        peephole weights.
+  """
+
+  def __init__(self, num_units, norm=True, use_peepholes=False,
+               initializer=None, scope='wn_lstm_cell', reuse=None):
+    super(WeightNormLSTMCell, self).__init__(num_units,
+                                                  forget_bias=1.0,
+                                                  state_is_tuple=True,
+                                                  reuse=reuse)
+    self.scope = scope
+    self.norm = norm
+    self.initializer = initializer
+    self.use_peepholes = use_peepholes
+
+  def _normalize(self, wx, wh, dtype):
+    """Implements normalization on the weight matrices"""
+    output_size = 4*self._num_units
+
+    gx = vs.get_variable("gx", [output_size], dtype=dtype)
+    gh = vs.get_variable("gh", [output_size], dtype=dtype)
+
+    nwx = nn_impl.l2_normalize(wx, dim=0) * gx
+    nwh = nn_impl.l2_normalize(wh, dim=0) * gh
+
+    return nwx, nwh
+
+  def _linear(self, x, h, bias, bias_start=0.0):
+    """Modified from rnn_cell_impl._linear() to split up the
+       sub-matrices transforming the inputs and hidden units"""
+
+    # Validate tensor shapes
+    shapes = [x.get_shape(), h.get_shape()]
+    for shape in shapes:
+      if shape.ndims != 2:
+        raise ValueError("linear is expecting 2D arguments: %s" % shapes)
+      if shape[1].value is None:
+        raise ValueError("linear expects shape[1] to be provided for \
+        shape %s, but saw %s" % (shape, shape[1]))
+
+    output_size = 4 * self._num_units
+    x_size = x.get_shape().as_list()[1]
+    h_size = h.get_shape().as_list()[1]
+    assert h_size == self._num_units,\
+    "Invalid hidden state size. Expected {} got {}"\
+    .format(self._num_units, h_size)
+    assert x_size == self._num_units,\
+    "Invalid input size. Expected {} got {}"\
+    .format(self.input_dim, x_size)
+
+    dtype = x.dtype
+    scope = vs.get_variable_scope()
+    with vs.variable_scope(scope) as outer_scope:
+      wx = vs.get_variable("wx", [x_size, output_size],
+                           dtype=dtype,
+                           initializer=self.initializer)
+      wh = vs.get_variable("wh", [h_size, output_size],
+                           dtype=dtype,
+                           initializer=self.initializer)
+
+      # Apply weight normalization
+      if self.norm:
+        with ops.control_dependencies(None):
+          wx, wh = self._normalize(wx, wh, dtype)
+
+      res = math_ops.matmul(x, wx) + math_ops.matmul(h, wh)
+
+      if not bias:
+        return res
+
+      with vs.variable_scope(outer_scope) as inner_scope:
+        inner_scope.set_partitioner(None)
+        biases = vs.get_variable("biases", [output_size],
+                                 dtype=dtype,
+                                 initializer=init_ops.constant_initializer
+                                 (bias_start, dtype=dtype))
+
+    return nn_ops.bias_add(res, biases)
+
+  def call(self, inputs, state, scope=None):
+
+    dtype = inputs.dtype
+    with vs.variable_scope(scope or self.scope):
+
+      c, h = state
+      concat = self._linear(inputs, h, bias=True)
+
+      # i = input_gate, j = new_input, f = forget_gate, o = output_gate
+      j, i, f, o = array_ops.split(value=concat, num_or_size_splits=4, axis=1)
+
+      if self.use_peepholes:
+        w_f_diag = vs.get_variable("w_f_diag", shape=[self._num_units], dtype=dtype)
+        w_i_diag = vs.get_variable("w_i_diag", shape=[self._num_units], dtype=dtype)
+        w_o_diag = vs.get_variable("w_o_diag", shape=[self._num_units], dtype=dtype)
+
+        new_c = (c * math_ops.sigmoid(f + self._forget_bias + w_f_diag * c)
+                 + math_ops.sigmoid(i + w_i_diag * c) * self._activation(j))
+        new_h = self._activation(new_c) * math_ops.sigmoid(o + w_o_diag * new_c)
+      else:
+        new_c = (c * math_ops.sigmoid(f + self._forget_bias)
+                 + math_ops.sigmoid(i) * self._activation(j))
+        new_h = self._activation(new_c) * math_ops.sigmoid(o)
+
+      new_state = rnn_cell_impl.LSTMStateTuple(new_c, new_h)
+      return new_h, new_state
+

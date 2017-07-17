@@ -37,6 +37,8 @@ from tensorflow.python.ops import math_ops
 from tensorflow.python.ops import random_ops
 from tensorflow.python.ops import rnn
 from tensorflow.python.ops import rnn_cell
+from tensorflow.python.ops.losses import losses_impl
+from tensorflow.python.training import adam
 from tensorflow.python.ops import variable_scope
 from tensorflow.python.ops import variables
 from tensorflow.python.platform import test
@@ -1365,6 +1367,83 @@ class BenchmarkLSTMCellXLA(test.Benchmark):
                   batch_size, num_units, input_depth, device, compiled,
                   benchmark_results["wall_time"]]]))
 
+
+class WeightNormBasicLSTMCellTest(test.TestCase):
+  """Compared cell output with pre-calculated values."""
+
+  def _cell_output(self, sess, peep, norm):
+    """Calculate cell output"""
+
+    x = array_ops.zeros([1, 2])
+    c0 = array_ops.zeros([1, 2])
+    h0 = array_ops.zeros([1, 2])
+
+    cell = contrib_rnn_cell.WeightNormLSTMCell(2, norm, peep)
+    state0 = rnn_cell.LSTMStateTuple(c0, h0)
+
+    xout, sout = cell(x, state0)
+    sess.run([variables.global_variables_initializer()])
+    res = sess.run([xout, sout], {
+        x.name: np.array([[1., 1.]]),
+        c0.name: 0.1 * np.asarray([[0, 1]]),
+        h0.name: 0.1 * np.asarray([[2, 3]]),
+    })
+
+    actual_state_c = res[1].c
+    actual_state_h = res[1].h
+
+    return actual_state_c, actual_state_h
+
+  def test_single_cell_outputs_with_norm(self):
+    """Tests the cell output with normalisation"""
+
+    with self.test_session() as sess:
+      init = init_ops.constant_initializer(0.5)
+      with variable_scope.variable_scope("root",
+                                         initializer=init):
+        actual_state_c, actual_state_h = self._cell_output(sess, False, True)
+
+    expected_state_c = np.array([[0.50125383, 0.58805949]])
+    expected_state_h = np.array([[0.32770363, 0.37397948]])
+
+    self.assertAllClose(expected_state_c, actual_state_c, 1e-5)
+    self.assertAllClose(expected_state_h, actual_state_h, 1e-5)
+
+  def test_single_cell_outputs_basic(self):
+    """Tests the cell output without normalisation"""
+
+    with self.test_session() as sess:
+      init = init_ops.constant_initializer(0.5)
+      with variable_scope.variable_scope("root",
+                                         initializer=init):
+        actual_state_c, actual_state_h = self._cell_output(sess, False, False)
+
+    expected_state_c = np.array([[0.65937078, 0.74983585]])
+    expected_state_h = np.array([[0.44923624, 0.49362513]])
+
+    self.assertAllClose(expected_state_c, actual_state_c, 1e-5)
+    self.assertAllClose(expected_state_h, actual_state_h, 1e-5)
+
+  def test_backprop(self):
+    """Test backprop with the normalised cell"""
+
+    with self.test_session() as sess:
+      init = init_ops.constant_initializer(0.5)
+      with variable_scope.variable_scope("root", initializer=init):
+        func = lambda: contrib_rnn_cell.WeightNormLSTMCell(20, False, True)
+        cell = rnn_cell.\
+               MultiRNNCell([func() for _ in range(2)])
+        x = array_ops.constant(np.random.randn(20, 20, 20),
+                               dtype=dtypes.float32)
+        y = array_ops.constant(np.random.randn(20, 20, 20))
+        x_out, _ = rnn.dynamic_rnn(cell,
+                                   inputs=x,
+                                   dtype=dtypes.float32,
+                                   swap_memory=True)
+        loss = losses_impl.mean_squared_error(x_out, y)
+        opt = adam.AdamOptimizer(0.001).minimize(loss)
+        sess.run(variables.global_variables_initializer())
+        sess.run(opt)
 
 if __name__ == "__main__":
   test.main()

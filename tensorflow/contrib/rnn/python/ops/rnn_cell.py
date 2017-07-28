@@ -2098,45 +2098,99 @@ class GLSTMCell(rnn_cell_impl.RNNCell):
     return m, new_state
 
 
-class WeightNormLSTMCell(rnn_cell_impl.BasicLSTMCell):
-  """Weight normalized LSTM Cell.
+class WeightNormLSTMCell(rnn_cell_impl.RNNCell):
+  """Weight normalized LSTM Cell. Adapted from `rnn_cell_impl.LSTMCell`
 
-        The implementation is based on
-        https://arxiv.org/abs/1602.07868
-        Tim Salimans, Diederik P. Kingma
-        Weight Normalization: A Simple Reparameterization to Accelerate
-        Training of Deep Neural Networks
+    The weight-norm implementation is based on:
+    https://arxiv.org/abs/1602.07868
+    Tim Salimans, Diederik P. Kingma.
+    Weight Normalization: A Simple Reparameterization to Accelerate
+    Training of Deep Neural Networks
 
-        LSTM implementation is the most basic by default, with optional
-        peephole weights.
+    The default LSTM implementation based on:
+    http://www.bioinf.jku.at/publications/older/2604.pdf
+    S. Hochreiter and J. Schmidhuber.
+    "Long Short-Term Memory". Neural Computation, 9(8):1735-1780, 1997.
+
+    The optional peephole implementation is based on:
+    https://research.google.com/pubs/archive/43905.pdf
+    Hasim Sak, Andrew Senior, and Francoise Beaufays.
+    "Long short-term memory recurrent neural network architectures for
+    large scale acoustic modeling." INTERSPEECH, 2014.
   """
 
   def __init__(self, num_units, norm=True, use_peepholes=False,
-               initializer=None, scope='wn_lstm_cell', reuse=None):
-    super(WeightNormLSTMCell, self).__init__(num_units,
-                                                  forget_bias=1.0,
-                                                  state_is_tuple=True,
-                                                  reuse=reuse)
-    self.scope = scope
-    self.norm = norm
-    self.initializer = initializer
-    self.use_peepholes = use_peepholes
+               initializer=None, forget_bias=1, activation=None,
+               reuse=None):
+    """Initialize the parameters for a weight-normalized LSTM cell.
 
-  def _normalize(self, wx, wh, dtype):
-    """Implements normalization on the weight matrices"""
-    output_size = 4*self._num_units
+    Args:
+      num_units: int, The number of units in the LSTM cell
+      norm: If `True`, apply normalization to the weight matrices. If False,
+        the result is identical to that obtained from `rnn_cell_impl.LSTMCell`
+      use_peepholes: bool, set `True` to enable diagonal/peephole connections.
+      initializer: (optional) The initializer to use for the weight matrices.
+      forget_bias: Biases of the forget gate are initialized by default to 1
+        in order to reduce the scale of forgetting at the beginning of
+        the training.
+      activation: Activation function of the inner states.  Default: `tanh`.
+      reuse: (optional) Python boolean describing whether to reuse variables
+        in an existing scope.  If not `True`, and the existing scope already has
+        the given variables, an error is raised.
+    """
+    super(WeightNormLSTMCell, self).__init__(_reuse=reuse)
 
-    gx = vs.get_variable("gx", [output_size], dtype=dtype)
-    gh = vs.get_variable("gh", [output_size], dtype=dtype)
+    self._scope = 'wn_lstm_cell'
+    self._num_units = num_units
+    self._norm = norm
+    self._initializer = initializer
+    self._use_peepholes = use_peepholes
+    self._activation = activation or math_ops.tanh
+    self._forget_bias = forget_bias
 
-    nwx = nn_impl.l2_normalize(wx, dim=0) * gx
-    nwh = nn_impl.l2_normalize(wh, dim=0) * gh
+    self._state_size = rnn_cell_impl.LSTMStateTuple(num_units, num_units)
+    self._output_size = num_units
 
-    return nwx, nwh
+  @property
+  def state_size(self):
+    return self._state_size
 
-  def _linear(self, x, h, bias, bias_start=0.0):
-    """Modified from rnn_cell_impl._linear() to split up the
-       sub-matrices transforming the inputs and hidden units"""
+  @property
+  def output_size(self):
+    return self._output_size
+
+  def _normalize(self, weight, name):
+    """Normalizes the given weight matrix and multiplies
+       with an independent scalar variable for each column."""
+    output_size = weight.get_shape().as_list()[1]
+    g = vs.get_variable(name, [output_size], dtype=weight.dtype)
+    return nn_impl.l2_normalize(weight, dim=0) * g
+
+  def _linear(self, x, h, output_size,
+              bias,
+              bias_initializer=None,
+              kernel_initializer=None):
+    """Modified from rnn_cell_impl._linear() to split the
+       weight matrix by inputs and hidden units.
+
+    Linear map: x * W_x + h *  W_h, where W_(x|h) are variables.
+
+    Args:
+      args: a 2D Tensor batch x n Tensor.
+      output_size: int, output dimensionality to map to.
+      bias: boolean, whether to add a bias term or not.
+      bias_initializer: starting value to initialize the bias
+        (default is all zeros).
+      kernel_initializer: starting value to initialize the weight.
+
+    Returns:
+      A 2D Tensor with shape [batch x output_size] equal to
+      x * W_x + h *  W_h, where W_(x|h) are newly created matrices.
+
+    Raises:
+      ValueError: if some of the arguments has unspecified or wrong shape.
+    """
+
 
     # Validate tensor shapes
     shapes = [x.get_shape(), h.get_shape()]
@@ -2147,31 +2201,26 @@ class WeightNormLSTMCell(rnn_cell_impl.BasicLSTMCell):
         raise ValueError("linear expects shape[1] to be provided for \
         shape %s, but saw %s" % (shape, shape[1]))
 
-    output_size = 4 * self._num_units
     x_size = x.get_shape().as_list()[1]
     h_size = h.get_shape().as_list()[1]
-    assert h_size == self._num_units,\
-    "Invalid hidden state size. Expected {} got {}"\
-    .format(self._num_units, h_size)
-    assert x_size == self._num_units,\
-    "Invalid input size. Expected {} got {}"\
-    .format(self.input_dim, x_size)
 
     dtype = x.dtype
     scope = vs.get_variable_scope()
     with vs.variable_scope(scope) as outer_scope:
-      wx = vs.get_variable("wx", [x_size, output_size],
+      wx = vs.get_variable("kernel_x", [x_size, output_size],
                            dtype=dtype,
-                           initializer=self.initializer)
-      wh = vs.get_variable("wh", [h_size, output_size],
+                           initializer=kernel_initializer)
+      wh = vs.get_variable("kernel_h", [h_size, output_size],
                            dtype=dtype,
-                           initializer=self.initializer)
+                           initializer=kernel_initializer)
 
       # Apply weight normalization
-      if self.norm:
+      if self._norm:
         with ops.control_dependencies(None):
-          wx, wh = self._normalize(wx, wh, dtype)
+          wx = self._normalize(wx, "wnorm_x")
+          wh = self._normalize(wh, "wnorm_h")
 
+      # LSTM time-step
       res = math_ops.matmul(x, wx) + math_ops.matmul(h, wh)
 
       if not bias:
@@ -2179,36 +2228,60 @@ class WeightNormLSTMCell(rnn_cell_impl.BasicLSTMCell):
 
       with vs.variable_scope(outer_scope) as inner_scope:
         inner_scope.set_partitioner(None)
-        biases = vs.get_variable("biases", [output_size],
+        if bias_initializer is None:
+          bias_initializer = init_ops.constant_initializer(0.0, dtype=dtype)
+        biases = vs.get_variable("bias", [output_size],
                                  dtype=dtype,
-                                 initializer=init_ops.constant_initializer
-                                 (bias_start, dtype=dtype))
+                                 initializer=bias_initializer)
 
     return nn_ops.bias_add(res, biases)
 
-  def call(self, inputs, state, scope=None):
+  def call(self, inputs, state):
+    """Run one step of LSTM.
 
+    Args:
+      inputs: input Tensor, 2D, batch x num_units.
+      state: Tuple of state Tensors, both `2-D`, with column sizes `c_state`
+        and `m_state`.
+
+    Returns:
+      A tuple containing:
+
+      - A `2-D, [batch x num_units]`, Tensor representing the output of the
+        LSTM after reading `inputs` when previous state was `state`.
+      - Tensor(s) representing the new state of LSTM after reading `inputs` when
+        the previous state was `state`.  Same type and shape(s) as `state`.
+
+    Raises:
+      ValueError: If input size cannot be inferred from inputs via
+        static shape inference.
+    """
     dtype = inputs.dtype
-    with vs.variable_scope(scope or self.scope):
+    sigmoid = math_ops.sigmoid
+    input_size = inputs.get_shape().with_rank(2)[1]
+    if input_size.value is None:
+      raise ValueError("Could not infer input size from inputs.get_shape()[-1]")
+
+    with vs.variable_scope(self._scope, initializer=self._initializer):
 
       c, h = state
-      concat = self._linear(inputs, h, bias=True)
+      concat = self._linear(inputs, h, 4 * self._num_units, bias=True)
 
       # i = input_gate, j = new_input, f = forget_gate, o = output_gate
       j, i, f, o = array_ops.split(value=concat, num_or_size_splits=4, axis=1)
 
-      if self.use_peepholes:
+      if self._use_peepholes:
         w_f_diag = vs.get_variable("w_f_diag", shape=[self._num_units], dtype=dtype)
         w_i_diag = vs.get_variable("w_i_diag", shape=[self._num_units], dtype=dtype)
         w_o_diag = vs.get_variable("w_o_diag", shape=[self._num_units], dtype=dtype)
 
-        new_c = (c * math_ops.sigmoid(f + self._forget_bias + w_f_diag * c)
-                 + math_ops.sigmoid(i + w_i_diag * c) * self._activation(j))
-        new_h = self._activation(new_c) * math_ops.sigmoid(o + w_o_diag * new_c)
+        new_c = (c * sigmoid(f + self._forget_bias + w_f_diag * c)
+                 + sigmoid(i + w_i_diag * c) * self._activation(j))
+        new_h = self._activation(new_c) * sigmoid(o + w_o_diag * new_c)
       else:
-        new_c = (c * math_ops.sigmoid(f + self._forget_bias)
-                 + math_ops.sigmoid(i) * self._activation(j))
-        new_h = self._activation(new_c) * math_ops.sigmoid(o)
+        new_c = (c * sigmoid(f + self._forget_bias)
+                 + sigmoid(i) * self._activation(j))
+        new_h = self._activation(new_c) * sigmoid(o)
 
       new_state = rnn_cell_impl.LSTMStateTuple(new_c, new_h)
       return new_h, new_state

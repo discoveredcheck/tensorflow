@@ -526,8 +526,8 @@ class RNNCellTest(test.TestCase):
     for state_is_tuple in [False, True]:
       with ops.Graph().as_default():
         with self.test_session() as sess:
-          with variable_scope.variable_scope("state_is_tuple_" + str(
-              state_is_tuple)):
+          with variable_scope.variable_scope("state_is_tuple_" +
+                                                     str(state_is_tuple)):
             lstm_cell = rnn_cell.BasicLSTMCell(
                 num_units, state_is_tuple=state_is_tuple)
             cell = contrib_rnn_cell.AttentionCellWrapper(
@@ -1371,71 +1371,97 @@ class BenchmarkLSTMCellXLA(test.Benchmark):
 class WeightNormBasicLSTMCellTest(test.TestCase):
   """Compared cell output with pre-calculated values."""
 
-  def _cell_output(self, sess, peep, norm):
+  def _cell_output(self, cell):
     """Calculate cell output"""
 
-    x = array_ops.zeros([1, 2])
-    c0 = array_ops.zeros([1, 2])
-    h0 = array_ops.zeros([1, 2])
+    with self.test_session() as sess:
+      init = init_ops.constant_initializer(0.5)
+      with variable_scope.variable_scope("root",
+                                         initializer=init):
+        x = array_ops.zeros([1, 2])
+        c0 = array_ops.zeros([1, 2])
+        h0 = array_ops.zeros([1, 2])
 
-    cell = contrib_rnn_cell.WeightNormLSTMCell(2, norm, peep)
-    state0 = rnn_cell.LSTMStateTuple(c0, h0)
+        #cell = contrib_rnn_cell.WeightNormLSTMCell(2, norm, peep)
+        #cell = rnn_cell.LSTMCell(2, use_peepholes=True)
+        state0 = rnn_cell.LSTMStateTuple(c0, h0)
 
-    xout, sout = cell(x, state0)
-    sess.run([variables.global_variables_initializer()])
-    res = sess.run([xout, sout], {
+        xout, sout = cell()(x, state0)
+
+      sess.run([variables.global_variables_initializer()])
+      res = sess.run([xout, sout], {
         x.name: np.array([[1., 1.]]),
         c0.name: 0.1 * np.asarray([[0, 1]]),
         h0.name: 0.1 * np.asarray([[2, 3]]),
-    })
+      })
 
     actual_state_c = res[1].c
     actual_state_h = res[1].h
 
     return actual_state_c, actual_state_h
 
-  def test_single_cell_outputs_with_norm(self):
-    """Tests the cell output with normalisation"""
-
-    with self.test_session() as sess:
-      init = init_ops.constant_initializer(0.5)
-      with variable_scope.variable_scope("root",
-                                         initializer=init):
-        actual_state_c, actual_state_h = self._cell_output(sess, False, True)
-
-    expected_state_c = np.array([[0.50125383, 0.58805949]])
-    expected_state_h = np.array([[0.32770363, 0.37397948]])
-
-    self.assertAllClose(expected_state_c, actual_state_c, 1e-5)
-    self.assertAllClose(expected_state_h, actual_state_h, 1e-5)
-
-  def test_single_cell_outputs_basic(self):
+  def test_basic_cell_outputs(self):
     """Tests the cell output without normalisation"""
 
-    with self.test_session() as sess:
-      init = init_ops.constant_initializer(0.5)
-      with variable_scope.variable_scope("root",
-                                         initializer=init):
-        actual_state_c, actual_state_h = self._cell_output(sess, False, False)
+    cell = lambda: contrib_rnn_cell.WeightNormLSTMCell(2,
+                                                       norm=False,
+                                                       use_peepholes=False)
 
-    expected_state_c = np.array([[0.65937078, 0.74983585]])
-    expected_state_h = np.array([[0.44923624, 0.49362513]])
+    actual_c, actual_h = self._cell_output(cell)
 
-    self.assertAllClose(expected_state_c, actual_state_c, 1e-5)
-    self.assertAllClose(expected_state_h, actual_state_h, 1e-5)
+    expected_c = np.array([[0.65937078, 0.74983585]])
+    expected_h = np.array([[0.44923624, 0.49362513]])
+
+    self.assertAllClose(expected_c, actual_c, 1e-5)
+    self.assertAllClose(expected_h, actual_h, 1e-5)
+
+  def test_nonbasic_cell_outputs(self):
+
+    cell = lambda: contrib_rnn_cell.WeightNormLSTMCell(2,
+                                                       norm=False,
+                                                       use_peepholes=True)
+    actual_c, actual_h = self._cell_output(cell)
+
+    expected_c = np.array([[0.65937084, 0.7574988]])
+    expected_h = np.array([[0.4792085, 0.53470564]])
+
+    self.assertAllClose(expected_c, actual_c, 1e-5)
+    self.assertAllClose(expected_h, actual_h, 1e-5)
+
+
+  def test_basic_cell_outputs_with_norm(self):
+    """Tests the cell output with normalisation"""
+
+    cell = lambda: contrib_rnn_cell.WeightNormLSTMCell(2,
+                                                       norm=True,
+                                                       use_peepholes=False)
+
+    actual_c, actual_h = self._cell_output(cell)
+
+    expected_c = np.array([[0.50125383, 0.58805949]])
+    expected_h = np.array([[0.32770363, 0.37397948]])
+
+    self.assertAllClose(expected_c, actual_c, 1e-5)
+    self.assertAllClose(expected_h, actual_h, 1e-5)
+
+  def test_nonbasic_cell_outputs_with_norm(self):
+      pass
 
   def test_backprop(self):
-    """Test backprop with the normalised cell"""
+    """Test a fully-featured cell with backprop.
+       Only a smoke test, no calculations are checked here."""
 
     with self.test_session() as sess:
       init = init_ops.constant_initializer(0.5)
       with variable_scope.variable_scope("root", initializer=init):
-        func = lambda: contrib_rnn_cell.WeightNormLSTMCell(20, False, True)
+        func = lambda: contrib_rnn_cell.WeightNormLSTMCell(20,
+                            norm=True, use_peepholes=True,
+                            cell_clip=0.1, num_proj=10)
         cell = rnn_cell.\
                MultiRNNCell([func() for _ in range(2)])
         x = array_ops.constant(np.random.randn(20, 20, 20),
                                dtype=dtypes.float32)
-        y = array_ops.constant(np.random.randn(20, 20, 20))
+        y = array_ops.constant(np.random.randn(20, 20, 10))
         x_out, _ = rnn.dynamic_rnn(cell,
                                    inputs=x,
                                    dtype=dtypes.float32,

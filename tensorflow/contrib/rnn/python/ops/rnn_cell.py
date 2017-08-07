@@ -2240,13 +2240,14 @@ class WeightNormLSTMCell(rnn_cell_impl.RNNCell):
           if norm:
             wn = []
             st = 0
-            for i in range(len(args)):
-              en = st + shapes[i][1].value
-              wn.append(self._normalize(weights[st:en, :],
+            with ops.control_dependencies(None):
+              for i in range(len(args)):
+                en = st + shapes[i][1].value
+                wn.append(self._normalize(weights[st:en, :],
                                         name='norm_{}'.format(i)))
-              st = en
+                st = en
 
-            weights = array_ops.concat(wn, axis=0)
+              weights = array_ops.concat(wn, axis=0)
 
           if len(args) == 1:
               res = math_ops.matmul(args[0], weights)

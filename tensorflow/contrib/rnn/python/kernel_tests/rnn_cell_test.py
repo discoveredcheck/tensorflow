@@ -1445,23 +1445,38 @@ class WeightNormBasicLSTMCellTest(test.TestCase):
     self.assertAllClose(expected_h, actual_h, 1e-5)
 
   def test_nonbasic_cell_outputs_with_norm(self):
-      pass
+    cell = lambda: contrib_rnn_cell.WeightNormLSTMCell(2,
+                                                       norm=True,
+                                                       use_peepholes=True)
+
+    actual_c, actual_h = self._cell_output(cell)
+
+    expected_c = np.array([[0.50125383, 0.58805949]])
+    expected_h = np.array([[0.32770363, 0.37397948]])
+
+    self.assertAllClose(expected_c, actual_c, 1e-5)
+    self.assertAllClose(expected_h, actual_h, 1e-5)
 
   def test_backprop(self):
     """Test a fully-featured cell with backprop.
        Only a smoke test, no calculations are checked here."""
 
+    B = 20
+    T = 30
+    N = 40
+    iD = 100
+    oD = 10
+
     with self.test_session() as sess:
       init = init_ops.constant_initializer(0.5)
       with variable_scope.variable_scope("root", initializer=init):
-        func = lambda: contrib_rnn_cell.WeightNormLSTMCell(20,
+        func = lambda: contrib_rnn_cell.WeightNormLSTMCell(N,
                             norm=True, use_peepholes=True,
-                            cell_clip=0.1, num_proj=10)
-        cell = rnn_cell.\
-               MultiRNNCell([func() for _ in range(2)])
-        x = array_ops.constant(np.random.randn(20, 20, 20),
+                            cell_clip=0.1, num_proj=oD)
+        cell = rnn_cell.MultiRNNCell([func() for _ in range(2)])
+        x = array_ops.constant(np.random.randn(B, T, iD),
                                dtype=dtypes.float32)
-        y = array_ops.constant(np.random.randn(20, 20, 10))
+        y = array_ops.constant(np.random.randn(B, T, oD))
         x_out, _ = rnn.dynamic_rnn(cell,
                                    inputs=x,
                                    dtype=dtypes.float32,

@@ -1390,9 +1390,9 @@ class WeightNormBasicLSTMCellTest(test.TestCase):
 
       sess.run([variables.global_variables_initializer()])
       res = sess.run([xout, sout], {
-        x.name: np.array([[1., 1.]]),
-        c0.name: 0.1 * np.asarray([[0, 1]]),
-        h0.name: 0.1 * np.asarray([[2, 3]]),
+          x.name: np.array([[1., 1.]]),
+          c0.name: 0.1 * np.asarray([[0, 1]]),
+          h0.name: 0.1 * np.asarray([[2, 3]]),
       })
 
     actual_state_c = res[1].c
@@ -1400,8 +1400,8 @@ class WeightNormBasicLSTMCellTest(test.TestCase):
 
     return actual_state_c, actual_state_h
 
-  def test_basic_cell_outputs(self):
-    """Tests the cell output without normalisation"""
+  def testBasicCell(self):
+    """Tests cell w/o peepholes and w/o normalisation"""
 
     cell = lambda: contrib_rnn_cell.WeightNormLSTMCell(2,
                                                        norm=False,
@@ -1415,8 +1415,8 @@ class WeightNormBasicLSTMCellTest(test.TestCase):
     self.assertAllClose(expected_c, actual_c, 1e-5)
     self.assertAllClose(expected_h, actual_h, 1e-5)
 
-  def test_nonbasic_cell_outputs(self):
-
+  def testNonbasicCell(self):
+    """Tests cell with peepholes and w/o normalisation"""
     cell = lambda: contrib_rnn_cell.WeightNormLSTMCell(2,
                                                        norm=False,
                                                        use_peepholes=True)
@@ -1429,8 +1429,8 @@ class WeightNormBasicLSTMCellTest(test.TestCase):
     self.assertAllClose(expected_h, actual_h, 1e-5)
 
 
-  def test_basic_cell_outputs_with_norm(self):
-    """Tests the cell output with normalisation"""
+  def testBasicCellWithNorm(self):
+    """Tests cell w/o peepholes and with normalisation"""
 
     cell = lambda: contrib_rnn_cell.WeightNormLSTMCell(2,
                                                        norm=True,
@@ -1444,39 +1444,47 @@ class WeightNormBasicLSTMCellTest(test.TestCase):
     self.assertAllClose(expected_c, actual_c, 1e-5)
     self.assertAllClose(expected_h, actual_h, 1e-5)
 
-  def test_nonbasic_cell_outputs_with_norm(self):
+  def testNonBasicCellWithNorm(self):
+    """Tests cell with peepholes and with normalisation"""
+
     cell = lambda: contrib_rnn_cell.WeightNormLSTMCell(2,
                                                        norm=True,
                                                        use_peepholes=True)
 
     actual_c, actual_h = self._cell_output(cell)
 
-    expected_c = np.array([[0.50125383, 0.58805949]])
-    expected_h = np.array([[0.32770363, 0.37397948]])
+    expected_c = np.array([[0.50125383, 0.59587258]])
+    expected_h = np.array([[0.35041603, 0.40873795]])
 
     self.assertAllClose(expected_c, actual_c, 1e-5)
     self.assertAllClose(expected_h, actual_h, 1e-5)
 
-  def test_backprop(self):
+  def testBackProp(self):
     """Test a fully-featured cell with backprop.
        Only a smoke test, no calculations are checked here."""
 
-    B = 20
-    T = 30
-    N = 40
-    iD = 100
-    oD = 10
+    batch_size = 20
+    time_size = 30
+    num_units = 40
+    input_dim = 100
+    output_dim = 10
 
     with self.test_session() as sess:
       init = init_ops.constant_initializer(0.5)
       with variable_scope.variable_scope("root", initializer=init):
-        func = lambda: contrib_rnn_cell.WeightNormLSTMCell(N,
-                            norm=True, use_peepholes=True,
-                            cell_clip=0.1, num_proj=oD)
+        func = lambda: contrib_rnn_cell.WeightNormLSTMCell(num_units,
+                                                           norm=True,
+                                                           use_peepholes=True,
+                                                           cell_clip=0.1,
+                                                           num_proj=output_dim)
         cell = rnn_cell.MultiRNNCell([func() for _ in range(2)])
-        x = array_ops.constant(np.random.randn(B, T, iD),
+        x = array_ops.constant(np.random.randn(batch_size,
+                                               time_size,
+                                               input_dim),
                                dtype=dtypes.float32)
-        y = array_ops.constant(np.random.randn(B, T, oD))
+        y = array_ops.constant(np.random.randn(batch_size,
+                                               time_size,
+                                               output_dim))
         x_out, _ = rnn.dynamic_rnn(cell,
                                    inputs=x,
                                    dtype=dtypes.float32,

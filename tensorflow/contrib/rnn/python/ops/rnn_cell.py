@@ -2363,7 +2363,6 @@ class LayerNormLSTMCell(rnn_cell_impl.RNNCell):
   """Long short-term memory unit (LSTM) recurrent network cell.
 
   The default non-peephole implementation is based on:
-
     http://www.bioinf.jku.at/publications/older/2604.pdf
 
   S. Hochreiter and J. Schmidhuber.

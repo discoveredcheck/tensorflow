@@ -2359,10 +2359,12 @@ class GLSTMCell(rnn_cell_impl.RNNCell):
     new_state = rnn_cell_impl.LSTMStateTuple(c, m)
     return m, new_state
 
+
 class LayerNormLSTMCell(rnn_cell_impl.RNNCell):
   """Long short-term memory unit (LSTM) recurrent network cell.
 
   The default non-peephole implementation is based on:
+
     http://www.bioinf.jku.at/publications/older/2604.pdf
 
   S. Hochreiter and J. Schmidhuber.
@@ -2456,6 +2458,7 @@ class LayerNormLSTMCell(rnn_cell_impl.RNNCell):
   def output_size(self):
     return self._output_size
 
+
   def _linear(self,
               args,
               output_size,
@@ -2478,7 +2481,6 @@ class LayerNormLSTMCell(rnn_cell_impl.RNNCell):
     Returns:
       A 2D Tensor with shape [batch x output_size] taking value
       sum_i(args[i] * W[i]), where each W[i] is a newly created Variable.
-
 
     Raises:
       ValueError: if some of the arguments has unspecified or wrong shape.
@@ -2553,7 +2555,6 @@ class LayerNormLSTMCell(rnn_cell_impl.RNNCell):
       ValueError: If input size cannot be inferred from inputs via
         static shape inference.
     """
-
     num_proj = self._num_units if self._num_proj is None else self._num_proj
     sigmoid = math_ops.sigmoid
 

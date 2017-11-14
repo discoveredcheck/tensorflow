@@ -42,6 +42,8 @@ from tensorflow.python.ops import variable_scope
 from tensorflow.python.ops import variables
 from tensorflow.python.platform import test
 from tensorflow.python.util import nest
+from tensorflow.python.ops.losses import losses_impl
+from tensorflow.python.training import adam
 
 
 class RNNCellTest(test.TestCase):
